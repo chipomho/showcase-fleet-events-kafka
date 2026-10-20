@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+    <Appenders>
+        <Console name="console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} %-5p [correlationId=%X{correlationId}] [truckId=%X{truckId}] %c{1} - %m%n"/>
+        </Console>
+    </Appenders>
+
+    <Loggers>
+        <AsyncLogger name="au.chipomho.fleet" level="INFO"/>
+        <AsyncLogger name="org.mule.munit" level="INFO"/>
+        <AsyncLogger name="org.apache.kafka" level="WARN"/>
+
+        <AsyncRoot level="WARN">
+            <AppenderRef ref="console"/>
+        </AsyncRoot>
+    </Loggers>
+</Configuration>

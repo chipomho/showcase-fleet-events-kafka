@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- Validation and enrichment rules in dw::modules::Telemetry, without any flow around them. -->
+    <munit:config name="telemetry-rules-test-suite.xml"/>
+
+    <sub-flow name="telemetry-rules-fixtures">
+        <ee:transform doc:name="Fixtures">
+            <ee:variables>
+                <ee:set-variable variableName="normal"><![CDATA[readUrl("classpath://fixtures/telemetry/normal.json", "application/json")]]></ee:set-variable>
+                <ee:set-variable variableName="limits"><![CDATA[{
+    coolantTempMaxC: 105,
+    oilPressureMinKpa: 150,
+    tyrePressureMinKpa: 600,
+    tyreTempMaxC: 85,
+    overloadPct: 110,
+    speedMaxKph: 60,
+    fuelMinPct: 10
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+    </sub-flow>
+
+    <munit:test name="validation-reports-every-problem" description="All failures are listed, not just the first">
+        <munit:execution>
+            <set-payload doc:name="Validate" value="#[dw::modules::Telemetry::validationErrors(
+                readUrl('classpath://fixtures/telemetry/missing-truck-id.json', 'application/json'))]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Problems" expression="#[payload]"
+                                     is="#[MunitTools::equalTo(['truckId is required', 'position.speedKph must be a number from 0 to 120'])]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="validation-rejects-non-objects" description="A JSON array is valid JSON but not an event">
+        <munit:execution>
+            <set-payload doc:name="Validate" value="#[dw::modules::Telemetry::validationErrors([1, 2, 3])]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Problems" expression="#[payload]"
+                                     is="#[MunitTools::equalTo(['the event must be a JSON object'])]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="validation-accepts-a-good-event" description="The normal fixture has no problems">
+        <munit:execution>
+            <flow-ref doc:name="Fixtures" name="telemetry-rules-fixtures"/>
+            <set-payload doc:name="Validate" value="#[dw::modules::Telemetry::validationErrors(vars.normal)]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="No problems" expression="#[payload]" is="#[MunitTools::isEmpty()]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="overload-is-a-warning" description="260 t on a 226.8 t truck is 114.6 percent, above the 110 percent limit">
+        <munit:execution>
+            <flow-ref doc:name="Fixtures" name="telemetry-rules-fixtures"/>
+            <set-payload doc:name="Enrich" value="#[dw::modules::Telemetry::enrich(
+                (vars.normal - 'payloadTonnes') ++ { payloadTonnes: 260 }, vars.limits, '2026-10-20T03:14:08.000Z')]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Utilisation" expression="#[payload.payloadUtilisationPct]" is="#[MunitTools::equalTo(114.6)]"/>
+            <munit-tools:assert-that doc:name="Overload" expression="#[payload.breaches.code]" is="#[MunitTools::equalTo(['OVERLOAD'])]"/>
+            <munit-tools:assert-that doc:name="Warning only" expression="#[payload.severity]" is="#[MunitTools::equalTo('WARNING')]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="unknown-model-skips-utilisation" description="No rating, no utilisation and no overload check">
+        <munit:execution>
+            <flow-ref doc:name="Fixtures" name="telemetry-rules-fixtures"/>
+            <set-payload doc:name="Enrich" value="#[dw::modules::Telemetry::enrich(
+                (vars.normal - 'model') ++ { model: 'PROTOTYPE_X1' }, vars.limits, '2026-10-20T03:14:08.000Z')]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="No utilisation" expression="#[payload.payloadUtilisationPct]" is="#[MunitTools::nullValue()]"/>
+            <munit-tools:assert-that doc:name="Normal" expression="#[payload.severity]" is="#[MunitTools::equalTo('NORMAL')]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="low-oil-pressure-ignored-at-idle" description="Oil pressure only matters with the engine running">
+        <munit:execution>
+            <flow-ref doc:name="Fixtures" name="telemetry-rules-fixtures"/>
+            <set-payload doc:name="Enrich" value="#[dw::modules::Telemetry::enrich(
+                (vars.normal - 'engine') ++ { engine: { coolantTempC: 60, oilPressureKpa: 0, rpm: 0 } },
+                vars.limits, '2026-10-20T03:14:08.000Z')]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="No breaches" expression="#[payload.breaches]" is="#[MunitTools::isEmpty()]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="low-oil-pressure-is-critical-when-running" description="The same reading at 1500 rpm is a critical breach">
+        <munit:execution>
+            <flow-ref doc:name="Fixtures" name="telemetry-rules-fixtures"/>
+            <set-payload doc:name="Enrich" value="#[dw::modules::Telemetry::enrich(
+                (vars.normal - 'engine') ++ { engine: { coolantTempC: 90, oilPressureKpa: 120, rpm: 1500 } },
+                vars.limits, '2026-10-20T03:14:08.000Z')]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Breach" expression="#[payload.breaches.code]" is="#[MunitTools::equalTo(['LOW_OIL_PRESSURE'])]"/>
+            <munit-tools:assert-that doc:name="Critical" expression="#[payload.severity]" is="#[MunitTools::equalTo('CRITICAL')]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="header-bytes-are-decoded" description="Kafka header values arrive as bytes">
+        <munit:execution>
+            <set-payload doc:name="Decode" value="#[dw::modules::Telemetry::headerText(
+                { 'x-correlation-id': write('dispatch-42', 'text/plain') as Binary }, 'x-correlation-id')]"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Text" expression="#[payload]" is="#[MunitTools::equalTo('dispatch-42')]"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

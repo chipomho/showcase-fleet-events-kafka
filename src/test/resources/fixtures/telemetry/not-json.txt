@@ -1,0 +1,1 @@
+TRUCK HT-0417 coolant=96.5 {truncated

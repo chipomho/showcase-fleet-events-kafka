@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!--
+        Bad JSON and failed validation are poison: retrying will never fix them, so they are
+        raised as FLEET:* errors that the error handler sends straight to the dead-letter topic.
+    -->
+    <sub-flow name="parse-and-validate-telemetry">
+        <try doc:name="Parse">
+            <ee:transform doc:name="JSON to event">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+import asEvent from dw::modules::Telemetry
+---
+asEvent(payload)]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <error-handler>
+                <on-error-propagate doc:name="Not JSON" type="MULE:EXPRESSION, MULE:TRANSFORMATION" logException="false">
+                    <raise-error doc:name="Unparseable" type="FLEET:UNPARSEABLE_EVENT"
+                                 description="The record is not a JSON document"/>
+                </on-error-propagate>
+            </error-handler>
+        </try>
+        <ee:transform doc:name="Validate">
+            <ee:variables>
+                <ee:set-variable variableName="validationErrors"><![CDATA[%dw 2.0
+output application/java
+import validationErrors from dw::modules::Telemetry
+---
+validationErrors(payload)]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <choice doc:name="Valid?">
+            <when expression="#[not isEmpty(vars.validationErrors)]">
+                <raise-error doc:name="Invalid" type="FLEET:INVALID_EVENT"
+                             description="#[vars.validationErrors joinBy '; ']"/>
+            </when>
+        </choice>
+    </sub-flow>
+
+    <!--
+        Threshold breaches go to fleet.alerts, everything else to fleet.metrics. The truck id is
+        the record key so each truck's events stay in order on one partition.
+    -->
+    <sub-flow name="route-telemetry">
+        <choice doc:name="Threshold breached?">
+            <when expression="#[not isEmpty(payload.breaches)]">
+                <kafka:publish doc:name="Publish alert" config-ref="kafka-producer-config"
+                               topic="${kafka.topics.alerts}" key="#[payload.truckId]" target="alertMetadata">
+                    <kafka:message><![CDATA[#[output application/json --- dw::modules::Telemetry::toAlert(payload)]]]></kafka:message>
+                    <kafka:headers><![CDATA[#[dw::modules::Telemetry::outboundHeaders('TRUCK_ALERT', correlationId, vars.record)]]]></kafka:headers>
+                </kafka:publish>
+                <set-variable doc:name="Published to alerts" variableName="publishedTo" value="${kafka.topics.alerts}"/>
+                <logger doc:name="Alert raised" level="INFO" category="au.chipomho.fleet.telemetry"
+                        message="#[output application/json indent=false --- {
+                            event: 'telemetry.alert_published',
+                            eventId: payload.eventId,
+                            severity: payload.severity,
+                            breaches: payload.breaches.code
+                        }]"/>
+            </when>
+            <otherwise>
+                <kafka:publish doc:name="Publish metrics" config-ref="kafka-producer-config"
+                               topic="${kafka.topics.metrics}" key="#[payload.truckId]" target="metricMetadata">
+                    <kafka:message><![CDATA[#[output application/json --- dw::modules::Telemetry::toMetric(payload)]]]></kafka:message>
+                    <kafka:headers><![CDATA[#[dw::modules::Telemetry::outboundHeaders('TRUCK_METRIC', correlationId, vars.record)]]]></kafka:headers>
+                </kafka:publish>
+                <set-variable doc:name="Published to metrics" variableName="publishedTo" value="${kafka.topics.metrics}"/>
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+    <!--
+        The original bytes are republished untouched so the record can be replayed once the
+        cause is fixed; everything needed to investigate travels in headers.
+    -->
+    <sub-flow name="publish-to-dead-letter-topic">
+        <kafka:publish doc:name="Publish to DLQ" config-ref="kafka-producer-config"
+                       topic="${kafka.topics.deadLetter}" key="#[attributes.key default null]" target="deadLetterMetadata">
+            <kafka:message><![CDATA[#[vars.rawEvent default payload]]]></kafka:message>
+            <kafka:headers><![CDATA[#[dw::modules::Telemetry::deadLetterHeaders(error, attributes, correlationId, p('kafka.consumer.groupId'))]]]></kafka:headers>
+        </kafka:publish>
+        <logger doc:name="Dead-lettered" level="WARN" category="au.chipomho.fleet.telemetry"
+                message="#[output application/json indent=false --- {
+                    event: 'telemetry.dead_lettered',
+                    errorType: dw::modules::Errors::errorTypeName(error),
+                    topic: attributes.topic,
+                    partition: attributes.partition,
+                    offset: attributes.offset
+                }]"/>
+    </sub-flow>
+
+</mule>

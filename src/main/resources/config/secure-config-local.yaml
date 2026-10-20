@@ -1,0 +1,8 @@
+# SASL/SCRAM credentials, encrypted with the Secure Properties Tool (AES/CBC) using the key
+# passed at runtime as -Dmule.key. The entries below are placeholders, not ciphertext:
+#
+#   java -cp secure-properties-tool.jar com.mulesoft.tools.SecurePropertiesTool \
+#     string encrypt AES CBC <16-character key> "<value>"
+kafka:
+  username: "![REPLACE_WITH_ENCRYPTED_USERNAME]"
+  password: "![REPLACE_WITH_ENCRYPTED_PASSWORD]"

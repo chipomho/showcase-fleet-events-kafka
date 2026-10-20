@@ -1,0 +1,31 @@
+# Shared development cluster.
+kafka:
+  bootstrapServers: "kafka-bootstrap.dev.internal:9092"
+  consumer:
+    groupId: "fleet-events-kafka"
+    consumerAmount: "2"
+    parallelConsumers: "3"
+    pollTimeoutMs: "1000"
+    # A record that keeps failing is redelivered this many times before it is dead-lettered.
+    maxRedeliveries: "5"
+  topics:
+    telemetry: "fleet.telemetry"
+    alerts: "fleet.alerts"
+    metrics: "fleet.metrics"
+    deadLetter: "fleet.telemetry.dlq"
+
+dedup:
+  # Duplicates come from producer retries and from redelivery after a rebalance or restart,
+  # both of which happen within minutes.
+  ttlMinutes: "60"
+  expiryIntervalMinutes: "5"
+
+fleet:
+  thresholds:
+    coolantTempMaxC: "105"
+    oilPressureMinKpa: "150"
+    tyrePressureMinKpa: "600"
+    tyreTempMaxC: "85"
+    overloadPct: "110"
+    speedMaxKph: "60"
+    fuelMinPct: "10"

@@ -1,0 +1,5 @@
+# MUnit only. Unencrypted dummy values are passed through as-is by the secure properties
+# module, and no test connects to a broker.
+kafka:
+  username: "munit"
+  password: "not-a-real-password"

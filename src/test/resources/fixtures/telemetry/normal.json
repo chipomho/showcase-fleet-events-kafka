@@ -1,0 +1,20 @@
+{
+  "eventId": "6f1c2c1e-3a77-4f51-9a0e-0b9a3c1d2e4f",
+  "eventType": "TRUCK_TELEMETRY",
+  "truckId": "HT-0417",
+  "model": "CAT_793F",
+  "siteId": "PILBARA-WEST",
+  "occurredAt": "2026-10-20T03:14:07.512Z",
+  "position": { "lat": -22.6931, "lon": 118.2264, "speedKph": 38.2 },
+  "engine": { "coolantTempC": 96.5, "oilPressureKpa": 410, "rpm": 1650 },
+  "tyres": [
+    { "position": "FL", "pressureKpa": 690, "tempC": 64 },
+    { "position": "FR", "pressureKpa": 688, "tempC": 66 },
+    { "position": "RLO", "pressureKpa": 702, "tempC": 70 },
+    { "position": "RLI", "pressureKpa": 699, "tempC": 71 },
+    { "position": "RRI", "pressureKpa": 695, "tempC": 69 },
+    { "position": "RRO", "pressureKpa": 701, "tempC": 68 }
+  ],
+  "payloadTonnes": 221.4,
+  "fuelLevelPct": 54.0
+}

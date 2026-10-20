@@ -1,0 +1,20 @@
+{
+  "eventId": "b0d7f6a2-91c4-4e3b-8f0d-5a2e7c9b1d33",
+  "eventType": "TRUCK_TELEMETRY",
+  "truckId": "HT-0422",
+  "model": "KOMATSU_930E",
+  "siteId": "PILBARA-WEST",
+  "occurredAt": "2026-10-20T03:15:41.090+08:00",
+  "position": { "lat": -22.7012, "lon": 118.2311, "speedKph": 22.4 },
+  "engine": { "coolantTempC": 112.0, "oilPressureKpa": 395, "rpm": 1720 },
+  "tyres": [
+    { "position": "FL", "pressureKpa": 560, "tempC": 74 },
+    { "position": "FR", "pressureKpa": 684, "tempC": 72 },
+    { "position": "RLO", "pressureKpa": 697, "tempC": 75 },
+    { "position": "RLI", "pressureKpa": 693, "tempC": 77 },
+    { "position": "RRI", "pressureKpa": 690, "tempC": 76 },
+    { "position": "RRO", "pressureKpa": 698, "tempC": 74 }
+  ],
+  "payloadTonnes": 288.0,
+  "fuelLevelPct": 41.5
+}

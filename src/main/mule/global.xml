@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd">
+
+    <global-property doc:name="Default environment" name="mule.env" value="local"/>
+
+    <configuration-properties doc:name="Environment properties" file="config/config-${mule.env}.yaml"/>
+
+    <secure-properties:config name="secure-properties-config" doc:name="Secure properties"
+                              file="config/secure-config-${mule.env}.yaml" key="${mule.key}">
+        <secure-properties:encrypt algorithm="AES" mode="CBC"/>
+    </secure-properties:config>
+
+    <!--
+        SASL/SCRAM over plaintext. For a TLS listener (SASL_SSL) add a tls:context with the
+        cluster's trust store to both connections.
+    -->
+    <kafka:consumer-config name="kafka-consumer-config" doc:name="Telemetry consumer">
+        <kafka:consumer-sasl-scram-connection groupId="${kafka.consumer.groupId}"
+                                              consumerAmount="${kafka.consumer.consumerAmount}"
+                                              autoOffsetReset="EARLIEST"
+                                              username="${secure::kafka.username}"
+                                              password="${secure::kafka.password}"
+                                              encryptionType="SCRAM_SHA_512">
+            <kafka:bootstrap-servers>
+                <kafka:bootstrap-server value="${kafka.bootstrapServers}"/>
+            </kafka:bootstrap-servers>
+            <kafka:topic-patterns>
+                <kafka:topic-pattern value="${kafka.topics.telemetry}"/>
+            </kafka:topic-patterns>
+        </kafka:consumer-sasl-scram-connection>
+    </kafka:consumer-config>
+
+    <!-- acks=all: an alert is only considered published once every in-sync replica has it. -->
+    <kafka:producer-config name="kafka-producer-config" doc:name="Fleet producer">
+        <kafka:producer-sasl-scram-connection producerAck="ALL"
+                                              username="${secure::kafka.username}"
+                                              password="${secure::kafka.password}"
+                                              encryptionType="SCRAM_SHA_512">
+            <kafka:bootstrap-servers>
+                <kafka:bootstrap-server value="${kafka.bootstrapServers}"/>
+            </kafka:bootstrap-servers>
+        </kafka:producer-sasl-scram-connection>
+    </kafka:producer-config>
+
+    <!--
+        eventIds already published. Persistent, because the commonest source of duplicates is a
+        record redelivered after a restart, and an in-memory store would have forgotten it.
+    -->
+    <os:object-store name="telemetry-dedup-store" doc:name="Processed event ids"
+                     persistent="true"
+                     entryTtl="${dedup.ttlMinutes}"
+                     entryTtlUnit="MINUTES"
+                     expirationInterval="${dedup.expiryIntervalMinutes}"
+                     expirationIntervalUnit="MINUTES"/>
+
+</mule>

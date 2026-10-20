@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd">
+
+    <!--
+        Two outcomes for a failed record:
+
+        - Poison (cannot be parsed, fails validation, or has failed maxRedeliveryCount times):
+          park it on the dead-letter topic and commit, so the partition keeps moving.
+        - Anything else (broker or object store trouble, a bug in a mapping): do not commit.
+          The record is consumed again; if it keeps failing the redelivery policy eventually
+          turns it into MULE:REDELIVERY_EXHAUSTED and it takes the first path.
+
+        If the DLQ publish itself fails, the error escapes this handler, nothing is committed,
+        and the record comes back later. Nothing is dropped silently.
+    -->
+    <error-handler name="telemetry-error-handler">
+        <on-error-continue doc:name="Poison: dead-letter and commit"
+                           type="FLEET:UNPARSEABLE_EVENT, FLEET:INVALID_EVENT, MULE:REDELIVERY_EXHAUSTED"
+                           logException="false">
+            <flow-ref doc:name="Publish to DLQ" name="publish-to-dead-letter-topic"/>
+            <kafka:commit doc:name="Commit offset" config-ref="kafka-consumer-config"
+                          commitKey="#[attributes.consumerCommitKey]"/>
+        </on-error-continue>
+        <on-error-propagate doc:name="Transient: leave uncommitted" type="ANY" logException="true">
+            <logger doc:name="Will be redelivered" level="WARN" category="au.chipomho.fleet.telemetry"
+                    message="#[output application/json indent=false --- {
+                        event: 'telemetry.redelivery_pending',
+                        errorType: dw::modules::Errors::errorTypeName(error),
+                        topic: attributes.topic,
+                        partition: attributes.partition,
+                        offset: attributes.offset
+                    }]"/>
+        </on-error-propagate>
+    </error-handler>
+
+</mule>

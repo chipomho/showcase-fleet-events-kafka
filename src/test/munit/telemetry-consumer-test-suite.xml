@@ -1,0 +1,397 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!--
+        The listener is not started; each test builds the event the Kafka source would deliver
+        (raw bytes plus record attributes) and calls the consumer flow. Every publish and commit
+        is mocked and counted.
+    -->
+    <munit:config name="telemetry-consumer-test-suite.xml"/>
+
+    <munit:before-test name="telemetry-reset-dedup-store" description="No event ids left over from earlier tests">
+        <os:clear doc:name="Clear dedup store" objectStore="telemetry-dedup-store"/>
+    </munit:before-test>
+
+    <sub-flow name="telemetry-mock-kafka">
+        <munit-tools:mock-when doc:name="Alerts topic" processor="kafka:publish">
+            <munit-tools:with-attributes>
+                <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish alert"/>
+            </munit-tools:with-attributes>
+            <munit-tools:then-return>
+                <munit-tools:payload value="#[{ topic: 'fleet.alerts', partition: 0, offset: 1 }]" mediaType="application/java"/>
+            </munit-tools:then-return>
+        </munit-tools:mock-when>
+        <munit-tools:mock-when doc:name="Metrics topic" processor="kafka:publish">
+            <munit-tools:with-attributes>
+                <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish metrics"/>
+            </munit-tools:with-attributes>
+            <munit-tools:then-return>
+                <munit-tools:payload value="#[{ topic: 'fleet.metrics', partition: 0, offset: 1 }]" mediaType="application/java"/>
+            </munit-tools:then-return>
+        </munit-tools:mock-when>
+        <munit-tools:mock-when doc:name="Dead-letter topic" processor="kafka:publish">
+            <munit-tools:with-attributes>
+                <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+            </munit-tools:with-attributes>
+            <munit-tools:then-return>
+                <munit-tools:payload value="#[{ topic: 'fleet.telemetry.dlq', partition: 0, offset: 1 }]" mediaType="application/java"/>
+            </munit-tools:then-return>
+        </munit-tools:mock-when>
+        <munit-tools:mock-when doc:name="Commit" processor="kafka:commit">
+            <munit-tools:with-attributes>
+                <munit-tools:with-attribute attributeName="doc:name" whereValue="Commit offset"/>
+            </munit-tools:with-attributes>
+        </munit-tools:mock-when>
+    </sub-flow>
+
+    <munit:test name="normal-reading-goes-to-metrics-and-is-committed"
+                description="No thresholds breached: enriched, published to fleet.metrics, offset committed">
+        <munit:behavior>
+            <flow-ref doc:name="Kafka mocks" name="telemetry-mock-kafka"/>
+            <munit-tools:spy doc:name="Inspect before publishing" processor="kafka:publish">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish metrics"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:assert-that doc:name="Normal" expression="#[payload.severity]" is="#[MunitTools::equalTo('NORMAL')]"/>
+                    <munit-tools:assert-that doc:name="Utilisation against the 793F rating" expression="#[payload.payloadUtilisationPct]"
+                                             is="#[MunitTools::equalTo(97.6)]"/>
+                    <munit-tools:assert-that doc:name="No header, so the eventId is the correlation id" expression="#[correlationId]"
+                                             is="#[MunitTools::equalTo('6f1c2c1e-3a77-4f51-9a0e-0b9a3c1d2e4f')]"/>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event doc:name="Kafka record">
+                <munit:payload value="#[MunitTools::getResourceAsByteArray('fixtures/telemetry/normal.json')]"
+                               mediaType="application/octet-stream"/>
+                <munit:attributes value="#[{ topic: 'fleet.telemetry', partition: 3, offset: 1042, key: 'HT-0417', consumerCommitKey: 'commit-1042', headers: {} }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="telemetry-consumer" name="telemetry-consumer"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:verify-call doc:name="Metrics" processor="kafka:publish" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish metrics"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Alerts" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Dead letters" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Commits" processor="kafka:commit" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Commit offset"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="threshold-breach-goes-to-alerts"
+                description="An overheating engine and a soft tyre are a CRITICAL alert, not a metric">
+        <munit:behavior>
+            <flow-ref doc:name="Kafka mocks" name="telemetry-mock-kafka"/>
+            <munit-tools:spy doc:name="Inspect before publishing" processor="kafka:publish">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish alert"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:assert-that doc:name="Breaches" expression="#[payload.breaches.code]"
+                                             is="#[MunitTools::equalTo(['ENGINE_OVERHEAT', 'TYRE_PRESSURE_LOW'])]"/>
+                    <munit-tools:assert-that doc:name="Critical" expression="#[payload.severity]" is="#[MunitTools::equalTo('CRITICAL')]"/>
+                    <munit-tools:assert-that doc:name="Alert body" expression="#[dw::modules::Telemetry::toAlert(payload).alertId]"
+                                             is="#[MunitTools::equalTo('b0d7f6a2-91c4-4e3b-8f0d-5a2e7c9b1d33:alert')]"/>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event doc:name="Kafka record">
+                <munit:payload value="#[MunitTools::getResourceAsByteArray('fixtures/telemetry/overheating.json')]"
+                               mediaType="application/octet-stream"/>
+                <munit:attributes value="#[{ topic: 'fleet.telemetry', partition: 1, offset: 77, key: 'HT-0422', consumerCommitKey: 'commit-77', headers: {} }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="telemetry-consumer" name="telemetry-consumer"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:verify-call doc:name="Metrics" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish metrics"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Alerts" processor="kafka:publish" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Dead letters" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Commits" processor="kafka:commit" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Commit offset"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="producer-correlation-id-is-adopted"
+                description="An x-correlation-id header from the producer becomes the correlation id">
+        <munit:behavior>
+            <flow-ref doc:name="Kafka mocks" name="telemetry-mock-kafka"/>
+            <munit-tools:spy doc:name="Inspect before publishing" processor="kafka:publish">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish metrics"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:assert-that doc:name="Producer id" expression="#[correlationId]"
+                                             is="#[MunitTools::equalTo('dispatch-7781')]"/>
+                    <munit-tools:assert-that doc:name="Forwarded in headers"
+                                             expression="#[dw::modules::Telemetry::outboundHeaders('TRUCK_METRIC', correlationId, vars.record).'x-correlation-id']"
+                                             is="#[MunitTools::equalTo('dispatch-7781')]"/>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event doc:name="Kafka record with header">
+                <munit:payload value="#[MunitTools::getResourceAsByteArray('fixtures/telemetry/normal.json')]"
+                               mediaType="application/octet-stream"/>
+                <munit:attributes value="#[{ topic: 'fleet.telemetry', partition: 3, offset: 1043, key: 'HT-0417', consumerCommitKey: 'commit-1043', headers: { 'x-correlation-id': 'dispatch-7781' } }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="telemetry-consumer" name="telemetry-consumer"/>
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="duplicate-event-is-skipped-and-committed"
+                description="An eventId already in the dedup store is not republished, but its offset is committed">
+        <munit:behavior>
+            <flow-ref doc:name="Kafka mocks" name="telemetry-mock-kafka"/>
+        </munit:behavior>
+        <munit:execution>
+            <os:store doc:name="Seen before" key="6f1c2c1e-3a77-4f51-9a0e-0b9a3c1d2e4f" objectStore="telemetry-dedup-store">
+                <os:value><![CDATA[#[{ publishedTo: 'fleet.metrics', offset: 1042 }]]]></os:value>
+            </os:store>
+            <munit:set-event doc:name="Same event redelivered">
+                <munit:payload value="#[MunitTools::getResourceAsByteArray('fixtures/telemetry/normal.json')]"
+                               mediaType="application/octet-stream"/>
+                <munit:attributes value="#[{ topic: 'fleet.telemetry', partition: 3, offset: 1042, key: 'HT-0417', consumerCommitKey: 'commit-1042b', headers: {} }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="telemetry-consumer" name="telemetry-consumer"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:verify-call doc:name="Metrics" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish metrics"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Alerts" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Dead letters" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Commits" processor="kafka:commit" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Commit offset"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="published-event-id-is-remembered"
+                description="After a successful publish the eventId is in the dedup store">
+        <munit:behavior>
+            <flow-ref doc:name="Kafka mocks" name="telemetry-mock-kafka"/>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event doc:name="Kafka record">
+                <munit:payload value="#[MunitTools::getResourceAsByteArray('fixtures/telemetry/normal.json')]"
+                               mediaType="application/octet-stream"/>
+                <munit:attributes value="#[{ topic: 'fleet.telemetry', partition: 3, offset: 1042, key: 'HT-0417', consumerCommitKey: 'commit-1042', headers: {} }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="telemetry-consumer" name="telemetry-consumer"/>
+            <os:retrieve doc:name="Dedup entry" key="6f1c2c1e-3a77-4f51-9a0e-0b9a3c1d2e4f" objectStore="telemetry-dedup-store"
+                         target="dedupEntry"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Records where it went" expression="#[vars.dedupEntry.publishedTo]"
+                                     is="#[MunitTools::equalTo('fleet.metrics')]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="failed-publish-is-neither-remembered-nor-committed"
+                description="If the broker rejects the publish, the record must come back and must not look like a duplicate">
+        <munit:behavior>
+            <munit-tools:mock-when doc:name="Metrics topic unavailable" processor="kafka:publish">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish metrics"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="KAFKA:CONNECTIVITY"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when doc:name="Commit" processor="kafka:commit">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Commit offset"/>
+                </munit-tools:with-attributes>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when doc:name="Dead-letter topic" processor="kafka:publish">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+                </munit-tools:with-attributes>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event doc:name="Kafka record">
+                <munit:payload value="#[MunitTools::getResourceAsByteArray('fixtures/telemetry/normal.json')]"
+                               mediaType="application/octet-stream"/>
+                <munit:attributes value="#[{ topic: 'fleet.telemetry', partition: 3, offset: 1042, key: 'HT-0417', consumerCommitKey: 'commit-1042', headers: {} }]"/>
+            </munit:set-event>
+            <try doc:name="Error reaches the source">
+                <flow-ref doc:name="telemetry-consumer" name="telemetry-consumer"/>
+                <error-handler>
+                    <on-error-continue type="KAFKA:CONNECTIVITY" logException="false">
+                        <set-variable variableName="propagated" value="#[true]"/>
+                    </on-error-continue>
+                </error-handler>
+            </try>
+            <os:contains doc:name="Remembered?" key="6f1c2c1e-3a77-4f51-9a0e-0b9a3c1d2e4f" objectStore="telemetry-dedup-store"
+                         target="remembered"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Error propagated for redelivery" expression="#[vars.propagated default false]"
+                                     is="#[MunitTools::equalTo(true)]"/>
+            <munit-tools:assert-that doc:name="Not in dedup store" expression="#[vars.remembered]" is="#[MunitTools::equalTo(false)]"/>
+            <munit-tools:verify-call doc:name="Nothing committed" processor="kafka:commit" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Commit offset"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Not dead-lettered" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="invalid-event-is-dead-lettered-and-committed"
+                description="Validation failures go to the DLQ with the error in headers, and the partition moves on">
+        <munit:behavior>
+            <flow-ref doc:name="Kafka mocks" name="telemetry-mock-kafka"/>
+            <munit-tools:spy doc:name="Inspect dead letter" processor="kafka:publish">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <set-variable variableName="dlqHeaders"
+                                  value="#[dw::modules::Telemetry::deadLetterHeaders(error, attributes, correlationId, 'fleet-events-kafka-test')]"/>
+                    <munit-tools:assert-that doc:name="Error type header" expression="#[vars.dlqHeaders.'x-error-type']"
+                                             is="#[MunitTools::equalTo('FLEET:INVALID_EVENT')]"/>
+                    <munit-tools:assert-that doc:name="Every problem listed" expression="#[vars.dlqHeaders.'x-error-description']"
+                                             is="#[MunitTools::equalTo('truckId is required; position.speedKph must be a number from 0 to 120')]"/>
+                    <munit-tools:assert-that doc:name="Where it came from" expression="#[vars.dlqHeaders.'x-original-offset']"
+                                             is="#[MunitTools::equalTo('2001')]"/>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event doc:name="Kafka record">
+                <munit:payload value="#[MunitTools::getResourceAsByteArray('fixtures/telemetry/missing-truck-id.json')]"
+                               mediaType="application/octet-stream"/>
+                <munit:attributes value="#[{ topic: 'fleet.telemetry', partition: 0, offset: 2001, key: null, consumerCommitKey: 'commit-2001', headers: {} }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="telemetry-consumer" name="telemetry-consumer"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:verify-call doc:name="Metrics" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish metrics"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Alerts" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Dead letters" processor="kafka:publish" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Commits" processor="kafka:commit" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Commit offset"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="unparseable-record-is-dead-lettered"
+                description="Bytes that are not JSON are poison too">
+        <munit:behavior>
+            <flow-ref doc:name="Kafka mocks" name="telemetry-mock-kafka"/>
+            <munit-tools:spy doc:name="Inspect dead letter" processor="kafka:publish">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+                </munit-tools:with-attributes>
+                <munit-tools:before-call>
+                    <munit-tools:assert-that doc:name="Error type" expression="#[dw::modules::Errors::errorTypeName(error)]"
+                                             is="#[MunitTools::equalTo('FLEET:UNPARSEABLE_EVENT')]"/>
+                </munit-tools:before-call>
+            </munit-tools:spy>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event doc:name="Kafka record">
+                <munit:payload value="#[MunitTools::getResourceAsByteArray('fixtures/telemetry/not-json.txt')]"
+                               mediaType="application/octet-stream"/>
+                <munit:attributes value="#[{ topic: 'fleet.telemetry', partition: 0, offset: 2002, key: 'HT-0417', consumerCommitKey: 'commit-2002', headers: {} }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="telemetry-consumer" name="telemetry-consumer"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:verify-call doc:name="Metrics" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish metrics"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Alerts" processor="kafka:publish" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish alert"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Dead letters" processor="kafka:publish" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Publish to DLQ"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call doc:name="Commits" processor="kafka:commit" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Commit offset"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+</mule>
