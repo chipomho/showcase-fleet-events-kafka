@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!-- De-duplication store: published eventIds, kept for dedup.ttlMinutes in telemetry-dedup-store. -->
+
+    <!-- Reads payload.eventId. Payload out: true if the event was already published. -->
+    <sub-flow name="is-event-published">
+        <os:contains doc:name="Already published?" key="#[payload.eventId]" objectStore="telemetry-dedup-store"/>
+    </sub-flow>
+
+    <!--
+        Reads payload.eventId, vars.publishedTo and vars.record.offset. Call it only after a
+        successful publish: a record whose publish failed is redelivered and must not look like
+        a duplicate when it comes back. Payload out: unchanged.
+    -->
+    <sub-flow name="remember-published-event">
+        <os:store doc:name="Remember eventId" key="#[payload.eventId]" objectStore="telemetry-dedup-store">
+            <os:value><![CDATA[#[{ publishedTo: vars.publishedTo, offset: vars.record.offset }]]]></os:value>
+        </os:store>
+    </sub-flow>
+
+</mule>

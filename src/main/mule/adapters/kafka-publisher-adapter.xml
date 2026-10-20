@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd">
+
+    <!--
+        Kafka producer adapter. Topic names come from properties; the truck id is the record
+        key so each truck's events stay in order on one partition. Every sub-flow leaves the
+        payload unchanged and puts the broker's record metadata in a variable.
+    -->
+
+    <!-- Reads the enriched event payload, vars.record and correlationId. Metadata out: vars.alertMetadata. -->
+    <sub-flow name="publish-telemetry-alert">
+        <kafka:publish doc:name="Publish alert" config-ref="kafka-producer-config"
+                       topic="${kafka.topics.alerts}" key="#[payload.truckId]" target="alertMetadata">
+            <kafka:message><![CDATA[#[output application/json --- dw::modules::Telemetry::toAlert(payload)]]]></kafka:message>
+            <kafka:headers><![CDATA[#[dw::modules::Telemetry::outboundHeaders('TRUCK_ALERT', correlationId, vars.record)]]]></kafka:headers>
+        </kafka:publish>
+    </sub-flow>
+
+    <!-- Reads the enriched event payload, vars.record and correlationId. Metadata out: vars.metricMetadata. -->
+    <sub-flow name="publish-telemetry-metric">
+        <kafka:publish doc:name="Publish metrics" config-ref="kafka-producer-config"
+                       topic="${kafka.topics.metrics}" key="#[payload.truckId]" target="metricMetadata">
+            <kafka:message><![CDATA[#[output application/json --- dw::modules::Telemetry::toMetric(payload)]]]></kafka:message>
+            <kafka:headers><![CDATA[#[dw::modules::Telemetry::outboundHeaders('TRUCK_METRIC', correlationId, vars.record)]]]></kafka:headers>
+        </kafka:publish>
+    </sub-flow>
+
+    <!--
+        Reads vars.rawEvent (falling back to the payload), the Kafka record attributes, the
+        current error and correlationId. The original bytes are republished untouched so the
+        record can be replayed once the cause is fixed; everything needed to investigate
+        travels in headers. Metadata out: vars.deadLetterMetadata.
+    -->
+    <sub-flow name="publish-dead-letter">
+        <kafka:publish doc:name="Publish to DLQ" config-ref="kafka-producer-config"
+                       topic="${kafka.topics.deadLetter}" key="#[attributes.key default null]" target="deadLetterMetadata">
+            <kafka:message><![CDATA[#[vars.rawEvent default payload]]]></kafka:message>
+            <kafka:headers><![CDATA[#[dw::modules::Telemetry::deadLetterHeaders(error, attributes, correlationId, p('kafka.consumer.groupId'))]]]></kafka:headers>
+        </kafka:publish>
+    </sub-flow>
+
+</mule>

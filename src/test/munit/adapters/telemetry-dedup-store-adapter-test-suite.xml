@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!-- The de-duplication adapter against the real (test) object store. -->
+    <munit:config name="telemetry-dedup-store-adapter-test-suite.xml"/>
+
+    <munit:before-test name="dedup-store-reset" description="No event ids left over from earlier tests">
+        <os:clear doc:name="Clear dedup store" objectStore="telemetry-dedup-store"/>
+    </munit:before-test>
+
+    <munit:test name="unseen-event-is-not-published" description="An eventId that was never stored reads as false">
+        <munit:execution>
+            <munit:set-event doc:name="Enriched event">
+                <munit:payload mediaType="application/java" value="#[{ eventId: 'evt-0001', truckId: 'HT-0417' }]"/>
+            </munit:set-event>
+            <flow-ref doc:name="is-event-published" name="is-event-published"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Not seen" expression="#[payload]" is="#[MunitTools::equalTo(false)]"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="remembered-event-is-published" description="After remember, the same eventId reads as true and the entry says where it went">
+        <munit:execution>
+            <munit:set-event doc:name="Published event">
+                <munit:payload mediaType="application/java" value="#[{ eventId: 'evt-0002', truckId: 'HT-0417' }]"/>
+                <munit:variables>
+                    <munit:variable key="publishedTo" value="fleet.alerts"/>
+                    <munit:variable key="record" mediaType="application/java" value="#[{ topic: 'fleet.telemetry', partition: 3, offset: 1042 }]"/>
+                </munit:variables>
+            </munit:set-event>
+            <flow-ref doc:name="remember-published-event" name="remember-published-event"/>
+            <set-variable doc:name="Payload after remember" variableName="afterRemember" value="#[payload.eventId]"/>
+            <flow-ref doc:name="is-event-published" name="is-event-published" target="published"/>
+            <os:retrieve doc:name="Entry" key="evt-0002" objectStore="telemetry-dedup-store" target="entry"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Payload untouched" expression="#[vars.afterRemember]" is="#[MunitTools::equalTo('evt-0002')]"/>
+            <munit-tools:assert-that doc:name="Seen" expression="#[vars.published]" is="#[MunitTools::equalTo(true)]"/>
+            <munit-tools:assert-that doc:name="Entry" expression="#[vars.entry]"
+                                     is="#[MunitTools::equalTo({ publishedTo: 'fleet.alerts', offset: 1042 })]"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd">
+
+    <!--
+        Kafka consumer adapter: manual offset commits for the telemetry listener.
+
+        commit-offset reads vars.record.commitKey, captured when the record arrived. A record
+        that is dead-lettered by the redelivery policy never reaches that capture, so the key
+        then comes straight from the listener's attributes; both hold the same value.
+        Payload out: unchanged.
+    -->
+    <sub-flow name="commit-offset">
+        <kafka:commit doc:name="Commit offset" config-ref="kafka-consumer-config"
+                      commitKey="#[vars.record.commitKey default attributes.consumerCommitKey]"/>
+    </sub-flow>
+
+</mule>

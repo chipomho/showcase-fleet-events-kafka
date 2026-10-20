@@ -2,10 +2,8 @@
 <mule xmlns="http://www.mulesoft.org/schema/mule/core"
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-      xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
       xsi:schemaLocation="
-        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
-        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd">
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
 
     <!--
         Two outcomes for a failed record:
@@ -23,9 +21,16 @@
         <on-error-continue doc:name="Poison: dead-letter and commit"
                            type="FLEET:UNPARSEABLE_EVENT, FLEET:INVALID_EVENT, MULE:REDELIVERY_EXHAUSTED"
                            logException="false">
-            <flow-ref doc:name="Publish to DLQ" name="publish-to-dead-letter-topic"/>
-            <kafka:commit doc:name="Commit offset" config-ref="kafka-consumer-config"
-                          commitKey="#[attributes.consumerCommitKey]"/>
+            <flow-ref doc:name="Publish to DLQ" name="publish-dead-letter"/>
+            <logger doc:name="Dead-lettered" level="WARN" category="au.chipomho.fleet.telemetry"
+                    message="#[output application/json indent=false --- {
+                        event: 'telemetry.dead_lettered',
+                        errorType: dw::modules::Errors::errorTypeName(error),
+                        topic: attributes.topic,
+                        partition: attributes.partition,
+                        offset: attributes.offset
+                    }]"/>
+            <flow-ref doc:name="Commit offset" name="commit-offset"/>
         </on-error-continue>
         <on-error-propagate doc:name="Transient: leave uncommitted" type="ANY" logException="true">
             <logger doc:name="Will be redelivered" level="WARN" category="au.chipomho.fleet.telemetry"

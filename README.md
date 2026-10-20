@@ -92,18 +92,27 @@ come from `secure-config-<env>.yaml`.
 
 ## Project layout
 
+Flows never talk to Kafka or the object store themselves: every publish, commit and store
+operation sits in an adapter sub-flow with a stated input and output, and only the listener
+source stays in the flow.
+
 ```
 src/main/mule/
-  global.xml                 properties, secure properties, Kafka consumer and producer configs, dedup store
-  telemetry-consumer.xml     listener, record context, correlation, commit; process-telemetry-event
-  telemetry-processing.xml   parse and validate, route to alerts or metrics, publish to the DLQ
-  common/error-handling.xml  telemetry-error-handler: dead-letter and commit, or leave for redelivery
+  config/global.xml                            properties and secure properties
+  config/connectors.xml                        Kafka consumer and producer configs
+  config/object-stores.xml                     dedup store
+  flows/telemetry-consumer.xml                 listener, record context, correlation, commit; process-telemetry-event
+  flows/telemetry-processing.xml               parse and validate, route to alerts or metrics
+  adapters/kafka-publisher-adapter.xml         publish-telemetry-alert, publish-telemetry-metric, publish-dead-letter
+  adapters/kafka-consumer-adapter.xml          commit-offset
+  adapters/telemetry-dedup-store-adapter.xml   is-event-published, remember-published-event
+  errors/telemetry-error-handler.xml           dead-letter and commit, or leave for redelivery
 src/main/resources/
-  config/                    config-<env>.yaml and secure-config-<env>.yaml for local, dev and test
-  dw/modules/                Telemetry (validation, enrichment, messages, headers), Errors
-  dw/mappings/               record-context, enrich-telemetry
-src/test/munit/              MUnit suites
-src/test/resources/fixtures/ telemetry records, good and bad
+  config/                                      config-<env>.yaml and secure-config-<env>.yaml for local, dev and test
+  dw/modules/                                  Telemetry (validation, enrichment, messages, headers), Errors
+  dw/mappings/                                 record-context, enrich-telemetry
+src/test/munit/                                flows/, adapters/, errors/ and dataweave/ suites
+src/test/resources/fixtures/                   telemetry records, good and bad
 ```
 
 ## Running locally
@@ -125,18 +134,23 @@ src/test/resources/fixtures/ telemetry records, good and bad
    `src/test/resources/fixtures/telemetry/overheating.json`, and watch `fleet.alerts`.
 
 For a TLS listener (SASL_SSL), add a `tls:context` with the cluster's trust store to both
-connections in `global.xml`.
+connections in `config/connectors.xml`.
 
 ## Tests
 
-The listener is never started in MUnit. Each test builds the event the Kafka source would
-deliver (raw bytes plus record attributes such as `consumerCommitKey`) and calls the
-consumer flow; every `kafka:publish` and `kafka:commit` is mocked and counted.
+The suites mirror the source folders. The listener is never started in MUnit: each test
+builds the event the Kafka source would deliver (raw bytes plus record attributes such as
+`consumerCommitKey`) and calls the consumer flow. Every `kafka:publish` and `kafka:commit` is
+mocked inside its adapter by `doc:name` and counted, so the adapters run in every flow test.
 
-- `telemetry-consumer-test-suite`: normal reading to metrics and committed; breach to alerts;
-  producer correlation id adopted; duplicate skipped but committed; published id stored in
-  the dedup store; a failed publish is neither stored nor committed; invalid and unparseable
-  records dead-lettered with the right headers and committed.
-- `telemetry-rules-test-suite`: validation and enrichment functions on their own.
+- `flows/telemetry-consumer-test-suite`: normal reading to metrics and committed; breach to
+  alerts; producer correlation id adopted; duplicate skipped but committed; published id
+  stored in the dedup store.
+- `errors/telemetry-error-handler-test-suite`: a failed publish is neither stored nor
+  committed; invalid and unparseable records are dead-lettered with the right headers and
+  committed.
+- `adapters/telemetry-dedup-store-adapter-test-suite`: the dedup check and the stored entry,
+  against the real test object store.
+- `dataweave/telemetry-rules-test-suite`: validation and enrichment functions on their own.
 
 Run them from Studio or with `mvn clean test`.

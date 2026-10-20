@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <!--
+        eventIds already published. Persistent, because the commonest source of duplicates is a
+        record redelivered after a restart, and an in-memory store would have forgotten it.
+    -->
+    <os:object-store name="telemetry-dedup-store" doc:name="Processed event ids"
+                     persistent="true"
+                     entryTtl="${dedup.ttlMinutes}"
+                     entryTtlUnit="MINUTES"
+                     expirationInterval="${dedup.expiryIntervalMinutes}"
+                     expirationIntervalUnit="MINUTES"/>
+
+</mule>

@@ -3,22 +3,9 @@
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
-      xmlns:os="http://www.mulesoft.org/schema/mule/os"
-      xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
       xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
-        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd
-        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
-        http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd">
-
-    <global-property doc:name="Default environment" name="mule.env" value="local"/>
-
-    <configuration-properties doc:name="Environment properties" file="config/config-${mule.env}.yaml"/>
-
-    <secure-properties:config name="secure-properties-config" doc:name="Secure properties"
-                              file="config/secure-config-${mule.env}.yaml" key="${mule.key}">
-        <secure-properties:encrypt algorithm="AES" mode="CBC"/>
-    </secure-properties:config>
+        http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd">
 
     <!--
         SASL/SCRAM over plaintext. For a TLS listener (SASL_SSL) add a tls:context with the
@@ -51,16 +38,5 @@
             </kafka:bootstrap-servers>
         </kafka:producer-sasl-scram-connection>
     </kafka:producer-config>
-
-    <!--
-        eventIds already published. Persistent, because the commonest source of duplicates is a
-        record redelivered after a restart, and an in-memory store would have forgotten it.
-    -->
-    <os:object-store name="telemetry-dedup-store" doc:name="Processed event ids"
-                     persistent="true"
-                     entryTtl="${dedup.ttlMinutes}"
-                     entryTtlUnit="MINUTES"
-                     expirationInterval="${dedup.expiryIntervalMinutes}"
-                     expirationIntervalUnit="MINUTES"/>
 
 </mule>

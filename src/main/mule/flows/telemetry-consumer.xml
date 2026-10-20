@@ -3,13 +3,11 @@
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xmlns:kafka="http://www.mulesoft.org/schema/mule/kafka"
-      xmlns:os="http://www.mulesoft.org/schema/mule/os"
       xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
       xmlns:tracing="http://www.mulesoft.org/schema/mule/tracing"
       xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/kafka http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd
-        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
         http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
         http://www.mulesoft.org/schema/mule/tracing http://www.mulesoft.org/schema/mule/tracing/current/mule-tracing.xsd">
 
@@ -40,7 +38,7 @@
             <flow-ref doc:name="Process event" name="process-telemetry-event"/>
         </tracing:with-correlation-id>
 
-        <kafka:commit doc:name="Commit offset" config-ref="kafka-consumer-config" commitKey="#[vars.record.commitKey]"/>
+        <flow-ref doc:name="Commit offset" name="commit-offset"/>
         <error-handler ref="telemetry-error-handler"/>
     </flow>
 
@@ -49,8 +47,7 @@
         <flow-ref doc:name="Parse and validate" name="parse-and-validate-telemetry"/>
         <tracing:set-logging-variable doc:name="truckId in every log line" variableName="truckId" value="#[payload.truckId]"/>
 
-        <os:contains doc:name="Already published?"
-                     key="#[payload.eventId]" objectStore="telemetry-dedup-store" target="alreadyPublished"/>
+        <flow-ref doc:name="Already published?" name="is-event-published" target="alreadyPublished"/>
         <choice doc:name="Duplicate?">
             <when expression="#[vars.alreadyPublished]">
                 <logger doc:name="Skip duplicate" level="INFO" category="au.chipomho.fleet.telemetry"
@@ -67,10 +64,7 @@
                     Recorded only after a successful publish. If the publish fails the record is
                     redelivered and must not look like a duplicate when it comes back.
                 -->
-                <os:store doc:name="Remember eventId"
-                          key="#[payload.eventId]" objectStore="telemetry-dedup-store">
-                    <os:value><![CDATA[#[{ publishedTo: vars.publishedTo, offset: vars.record.offset }]]]></os:value>
-                </os:store>
+                <flow-ref doc:name="Remember eventId" name="remember-published-event"/>
             </otherwise>
         </choice>
     </flow>
